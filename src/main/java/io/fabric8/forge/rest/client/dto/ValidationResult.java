@@ -79,4 +79,17 @@ public class ValidationResult {
     public void setMessages(List<UIMessageDTO> messages) {
         this.messages = messages;
     }
+
+    public String validationMessage() {
+        StringBuilder builder = new StringBuilder();
+        if (messages != null) {
+            for (UIMessageDTO message : messages) {
+                if (builder.length() > 0) {
+                    builder.append(", ");
+                }
+                builder.append(message.validationMessage());
+            }
+        }
+        return builder.toString();
+    }
 }

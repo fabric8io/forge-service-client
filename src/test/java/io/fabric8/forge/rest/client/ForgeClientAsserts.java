@@ -22,6 +22,7 @@ import com.offbytwo.jenkins.model.BuildResult;
 import com.offbytwo.jenkins.model.BuildWithDetails;
 import com.offbytwo.jenkins.model.JobWithDetails;
 import io.fabric8.forge.rest.client.dto.CommandInputDTO;
+import io.fabric8.forge.rest.client.dto.ExecutionRequest;
 import io.fabric8.forge.rest.client.dto.ExecutionResult;
 import io.fabric8.forge.rest.client.dto.PropertyDTO;
 import io.fabric8.forge.rest.client.dto.ValidationResult;
@@ -87,15 +88,17 @@ public class ForgeClientAsserts {
     }
 
 
-    public static void assertValidAndCanMoveNext(ValidationResult result) {
+    public static void assertValidAndCanMoveNext(ExecutionRequest executionRequest, ValidationResult result) {
         assertThat(result).isNotNull();
+        int stepIndex = executionRequest.stepIndex();
+        String prefix = "page " + stepIndex + ": ";
 
         if (doAssert) {
-            assertThat(result.isValid()).describedAs("isValid").isTrue();
-            assertThat(result.isCanMoveToNextStep()).describedAs("isCanMoveToNextStep").isTrue();
+            assertThat(result.isValid()).describedAs(prefix + "isValid " + result.validationMessage()).isTrue();
+            assertThat(result.isCanMoveToNextStep()).describedAs(prefix + "isCanMoveToNextStep "+ result.validationMessage()).isTrue();
         } else {
-            LOG.info("isValid: " + result.isValid());
-            LOG.info("isCanMoveToNextStep: " + result.isCanMoveToNextStep());
+            LOG.info(prefix + "isValid: " + result.isValid() + " " + result.validationMessage());
+            LOG.info(prefix + "isCanMoveToNextStep: " + result.isCanMoveToNextStep()+ " " + result.validationMessage());
         }
     }
 
@@ -116,13 +119,20 @@ public class ForgeClientAsserts {
             return null;
         }
 
+        Object text = null;
         boolean contained = valueChoices.contains(value);
         if (!contained) {
             // we may have maps containing a value property
             for (Object choice : valueChoices) {
                 if (choice instanceof Map) {
                     Map map = (Map) choice;
-                    Object text = map.get("value");
+                    text = map.get("value");
+                    if (text == null) {
+                        text = map.get("id");
+                    }
+                    if (text == null) {
+                        text = map.get("name");
+                    }
                     if (text != null && value.equals(text)) {
                         contained = true;
                         break;
@@ -132,7 +142,7 @@ public class ForgeClientAsserts {
             }
         }
         assertThat(contained).describedAs(("Choices for property " + propertyName + " on page " + pageNumber + " with choices: " + valueChoices) + " does not contain " + value).isTrue();
-        return value;
+        return text;
     }
 
 

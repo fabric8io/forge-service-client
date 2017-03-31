@@ -67,6 +67,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class ForgeTestSupport {
     private static final transient Logger LOG = LoggerFactory.getLogger(ForgeTestSupport.class);
 
+    protected String gitProvider = "gogs";
     protected ForgeClient forgeClient = new ForgeClient();
 
     public String generateProjectName(String prefix) {
@@ -79,30 +80,18 @@ public class ForgeTestSupport {
     public void assertCreateAndBuildProject(String prefix, final String projectType) throws Exception {
         String projectName = generateProjectName(prefix);
 
-        String commandName = ProjectNew;
-
         ValueProvider projectTypeValues = new ValueProvider() {
             @Override
             public Object getValue(String propertyName, PropertyDTO property, int pageNumber) {
                 switch (propertyName) {
+                    case "gitProvider":
+                        return gitProvider;
                     case "named":
                         return projectName;
                     case "targetLocation":
                         return null;
                     case "type":
                         return assertChooseValue(propertyName, property, pageNumber, projectType);
-                }
-                return super.getValue(propertyName, property, pageNumber);
-
-            }
-        };
-
-        executeWizardCommand(commandName, projectTypeValues, 1);
-
-        ValueProvider pipelineValues = new ValueProvider() {
-            @Override
-            public Object getValue(String propertyName, PropertyDTO property, int pageNumber) {
-                switch (propertyName) {
                     case "pipeline":
                         return assertChooseValue(propertyName, property, pageNumber, CanaryReleaseAndStage);
                 }
@@ -111,7 +100,7 @@ public class ForgeTestSupport {
             }
         };
 
-        executeWizardCommand(DevopsEdit, pipelineValues, 1);
+        executeWizardCommand(CommandNames.OBSIDIAN_NEW_QUICKSTART, projectTypeValues, 4);
 
         Build firstBuild = ForgeClientAsserts.assertBuildCompletes(forgeClient, projectName);
 
@@ -240,7 +229,7 @@ public class ForgeTestSupport {
 
     protected NextStepResult validateAndNextStep(String commandName, ExecutionRequest executionRequest, ValueProvider valueProvider) throws Exception {
         ValidationResult validationResult = validateAndUpdatePageValues(commandName, executionRequest, valueProvider);
-        ForgeClientAsserts.assertValidAndCanMoveNext(validationResult);
+        ForgeClientAsserts.assertValidAndCanMoveNext(executionRequest, validationResult);
 
         return forgeClient.nextStep(commandName, executionRequest);
     }
@@ -262,5 +251,30 @@ public class ForgeTestSupport {
         // lets update the page with any completed values
         updatePageValues(executionRequest.getInputs(), commandProperties, valueProvider, page);
         return result;
+    }
+
+    protected void configureGogsGitAccount() throws Exception {
+        CommandInputDTO info = forgeClient.getCommandInput(CommandNames.CONFIGURE_GIT_ACCOUNT);
+        ForgeClientAsserts.assertValidCommandInput(info);
+
+        ValueProvider projectTypeValues = new ValueProvider() {
+            @Override
+            public Object getValue(String propertyName, PropertyDTO property, int pageNumber) {
+                switch (propertyName) {
+                    case "gitProvider":
+                        return "gogs";
+                    case "gitUserName":
+                        return "gogsadmin";
+                    case "gitEmail":
+                        return "fabric8io@googlegroups.com";
+                    case "gitPassword":
+                        return "RedHat$1";
+                }
+                return super.getValue(propertyName, property, pageNumber);
+
+            }
+        };
+
+        executeWizardCommand(CommandNames.CONFIGURE_GIT_ACCOUNT, projectTypeValues, 2);
     }
 }

@@ -16,17 +16,16 @@
  */
 package io.fabric8.forge.rest.client;
 
-import io.fabric8.forge.rest.client.dto.CommandInputDTO;
-import io.fabric8.forge.rest.client.dto.PropertyDTO;
 import org.junit.Test;
+
+import static io.fabric8.forge.rest.client.CommandConstants.ProjectNewProperties.Type.Microservice;
 
 /**
  */
-public class ConfigureGogsTest extends ForgeTestSupport {
+public class CreateSpringBootProjectKT extends ForgeGogsTestSupport {
 
     @Test
-    public void testConfigureGogs() throws Exception {
-        configureGogsGitAccount();
+    public void testSpringBootProject() throws Exception {
+        assertCreateAndBuildProject("springboot-rest-", "Spring Boot Tomcat - Rest");
     }
-
 }

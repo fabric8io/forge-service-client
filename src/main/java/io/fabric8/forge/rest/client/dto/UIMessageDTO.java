@@ -20,7 +20,7 @@ package io.fabric8.forge.rest.client.dto;
  */
 public class UIMessageDTO {
     private String description;
-    private String inputName;
+    private String input;
     private String severity;
 
     public UIMessageDTO() {
@@ -31,7 +31,7 @@ public class UIMessageDTO {
     public String toString() {
         return "UIMessageDTO{" +
                 "description='" + description + '\'' +
-                ", inputName='" + inputName + '\'' +
+                ", input='" + input + '\'' +
                 ", severity=" + severity +
                 '}';
     }
@@ -44,12 +44,12 @@ public class UIMessageDTO {
         this.description = description;
     }
 
-    public String getInputName() {
-        return inputName;
+    public String getInput() {
+        return input;
     }
 
-    public void setInputName(String inputName) {
-        this.inputName = inputName;
+    public void setInput(String input) {
+        this.input = input;
     }
 
     public String getSeverity() {
@@ -58,5 +58,9 @@ public class UIMessageDTO {
 
     public void setSeverity(String severity) {
         this.severity = severity;
+    }
+
+    public String validationMessage() {
+        return "" + input + (description != null && description.length() > 0 ? ": " + description : "");
     }
 }

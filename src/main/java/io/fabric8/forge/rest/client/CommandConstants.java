@@ -20,7 +20,7 @@ package io.fabric8.forge.rest.client;
 /**
  */
 public class CommandConstants {
-    public static final String ProjectNew = Constants.PROJECT_NEW_COMMAND;
+    public static final String ProjectNew = "project-new";
     public static final String DevopsEdit = "devops-edit";
 
     public static class ProjectNewProperties {
