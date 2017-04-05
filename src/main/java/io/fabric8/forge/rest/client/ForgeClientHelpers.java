@@ -17,16 +17,36 @@
 package io.fabric8.forge.rest.client;
 
 import com.offbytwo.jenkins.JenkinsServer;
+import com.offbytwo.jenkins.client.JenkinsHttpClient;
 import io.fabric8.forge.rest.client.dto.CommandInputDTO;
 import io.fabric8.forge.rest.client.dto.ExecutionRequest;
 import io.fabric8.forge.rest.client.dto.InputValueDTO;
 import io.fabric8.forge.rest.client.dto.PropertyDTO;
 import io.fabric8.forge.rest.client.dto.ValidationResult;
 import io.fabric8.forge.rest.client.dto.WizardState;
+import io.fabric8.kubernetes.api.KubernetesHelper;
+import io.fabric8.kubernetes.api.ServiceNames;
+import io.fabric8.kubernetes.client.Config;
+import io.fabric8.kubernetes.client.KubernetesClient;
+import io.fabric8.kubernetes.client.internal.SSLUtils;
 import io.fabric8.utils.Function;
+import io.fabric8.utils.Strings;
+import org.apache.http.HttpException;
+import org.apache.http.HttpRequest;
+import org.apache.http.HttpRequestInterceptor;
+import org.apache.http.conn.ssl.X509HostnameVerifier;
+import org.apache.http.impl.client.HttpClientBuilder;
+import org.apache.http.protocol.HttpContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLSession;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -34,6 +54,14 @@ import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.security.GeneralSecurityException;
+import java.security.KeyManagementException;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.UnrecoverableKeyException;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
+import java.security.spec.InvalidKeySpecException;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -149,12 +177,87 @@ public class ForgeClientHelpers {
         }
     }
 
-    public static JenkinsServer createJenkinsServer() throws URISyntaxException {
-        String url = getJenkinsURL();
-        return new JenkinsServer(new URI(url));
+    public static JenkinsServer createJenkinsServer(final KubernetesClient kubernetesClient, String jenkinsNamespace) throws URISyntaxException, CertificateException, UnrecoverableKeyException, NoSuchAlgorithmException, KeyStoreException, KeyManagementException, InvalidKeySpecException, IOException {
+        final Config config = kubernetesClient.getConfiguration();
+        String url = getJenkinsURL(kubernetesClient, jenkinsNamespace);
+        if (Strings.isNullOrBlank(url) || url.startsWith("http://null:")) {
+            throw new IllegalArgumentException("No Jenkins Service found in namespace: " + jenkinsNamespace);
+        }
+        System.out.println("Connecting to jenkins at: " + url);
+        URI serverUri = new URI(url);
+        HttpClientBuilder builder = HttpClientBuilder.create();
+        configureSsl(builder, config);
+        builder.addInterceptorFirst(new HttpRequestInterceptor() {
+            @Override
+            public void process(HttpRequest request, HttpContext context) throws HttpException, IOException {
+                String oauthToken = config.getOauthToken();
+                if (Strings.isNullOrBlank(oauthToken)) {
+                    System.out.println("No OpenShift OAuth Token!");
+                } else {
+                    request.setHeader("Authorization", "Bearer " + oauthToken);
+                }
+            }
+        });
+        JenkinsHttpClient client = new JenkinsHttpClient(serverUri, builder);
+        return new JenkinsServer(client);
+/*
+        String username = System.getenv("JENKINS_USER");
+        String password = System.getenv("JENKINS_PASSWORD");
+        if (Strings.isNotBlank(username) && Strings.isNotBlank(password)) {
+            return new JenkinsServer(serverUri, username, password);
+        }
+        return new JenkinsServer(serverUri);
+*/
     }
 
-    public static String getJenkinsURL() {
+    protected static void configureSsl(HttpClientBuilder httpClientBuilder, Config config) throws CertificateException, NoSuchAlgorithmException, KeyStoreException, IOException, KeyManagementException, UnrecoverableKeyException, InvalidKeySpecException {
+        httpClientBuilder.setHostnameVerifier(new X509HostnameVerifier() {
+            @Override
+            public void verify(String s, SSLSocket sslSocket) throws IOException {
+            }
+
+            @Override
+            public void verify(String s, X509Certificate x509Certificate) throws SSLException {
+            }
+
+            @Override
+            public void verify(String s, String[] strings, String[] strings1) throws SSLException {
+            }
+
+            @Override
+            public boolean verify(String s, SSLSession sslSession) {
+                return true;
+            }
+        });
+        TrustManager[] trustManagers = SSLUtils.trustManagers(config);
+        KeyManager[] keyManagers = SSLUtils.keyManagers(config);
+
+        if (keyManagers != null || trustManagers != null || config.isTrustCerts()) {
+            X509TrustManager trustManager = null;
+            if (trustManagers != null && trustManagers.length == 1) {
+                trustManager = (X509TrustManager) trustManagers[0];
+            }
+
+            try {
+                SSLContext sslContext = SSLUtils.sslContext(keyManagers, trustManagers, config.isTrustCerts());
+                httpClientBuilder.setSslcontext(sslContext);
+                //httpClientBuilder.sslSocketFactory(sslContext.getSocketFactory(), trustManager);
+            } catch (GeneralSecurityException e) {
+                throw new AssertionError(); // The system has no TLS. Just give up.
+            }
+        } else {
+            SSLContext context = SSLContext.getInstance("TLSv1.2");
+            context.init(keyManagers, trustManagers, null);
+            httpClientBuilder.setSslcontext(context);
+            //httpClientBuilder.sslSocketFactory(context.getSocketFactory(), (X509TrustManager) trustManagers[0]);
+        }
+    }
+
+    public static String getJenkinsURL(KubernetesClient kubernetesClient, String namespace) {
+        String jenkinsUrl = KubernetesHelper.getServiceURL(kubernetesClient, ServiceNames.JENKINS, namespace, "http", true);
+        if (Strings.isNotBlank(jenkinsUrl)) {
+            return jenkinsUrl;
+        }
         return getEnvironmentValue(EnvironmentVariables.JENKINS_URL, "http://jenkins/");
     }
 

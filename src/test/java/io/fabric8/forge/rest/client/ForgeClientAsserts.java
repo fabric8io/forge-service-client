@@ -16,17 +16,18 @@
  */
 package io.fabric8.forge.rest.client;
 
+import com.google.common.base.Optional;
 import com.offbytwo.jenkins.JenkinsServer;
 import com.offbytwo.jenkins.model.Build;
 import com.offbytwo.jenkins.model.BuildResult;
 import com.offbytwo.jenkins.model.BuildWithDetails;
+import com.offbytwo.jenkins.model.FolderJob;
 import com.offbytwo.jenkins.model.JobWithDetails;
 import io.fabric8.forge.rest.client.dto.CommandInputDTO;
 import io.fabric8.forge.rest.client.dto.ExecutionRequest;
 import io.fabric8.forge.rest.client.dto.ExecutionResult;
 import io.fabric8.forge.rest.client.dto.PropertyDTO;
 import io.fabric8.forge.rest.client.dto.ValidationResult;
-import io.fabric8.forge.rest.client.dto.WizardState;
 import io.fabric8.kubernetes.api.Annotations;
 import io.fabric8.kubernetes.api.model.HasMetadata;
 import io.fabric8.kubernetes.api.model.HasMetadataAssert;
@@ -55,11 +56,10 @@ import java.net.URL;
 import java.util.List;
 import java.util.Map;
 
-import static io.fabric8.forge.rest.client.ForgeClientHelpers.createJenkinsServer;
-import static io.fabric8.forge.rest.client.ForgeClientHelpers.getJenkinsURL;
 import static io.fabric8.forge.rest.client.ForgeClientHelpers.tailLog;
 import static io.fabric8.kubernetes.api.KubernetesHelper.getOrCreateAnnotations;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Fail.fail;
 
 /**
  */
@@ -95,10 +95,10 @@ public class ForgeClientAsserts {
 
         if (doAssert) {
             assertThat(result.isValid()).describedAs(prefix + "isValid " + result.validationMessage()).isTrue();
-            assertThat(result.isCanMoveToNextStep()).describedAs(prefix + "isCanMoveToNextStep "+ result.validationMessage()).isTrue();
+            assertThat(result.isCanMoveToNextStep()).describedAs(prefix + "isCanMoveToNextStep " + result.validationMessage()).isTrue();
         } else {
             LOG.info(prefix + "isValid: " + result.isValid() + " " + result.validationMessage());
-            LOG.info(prefix + "isCanMoveToNextStep: " + result.isCanMoveToNextStep()+ " " + result.validationMessage());
+            LOG.info(prefix + "isCanMoveToNextStep: " + result.isCanMoveToNextStep() + " " + result.validationMessage());
         }
     }
 
@@ -149,8 +149,8 @@ public class ForgeClientAsserts {
     /**
      * Asserts that a Build is created and that it completes successfully within the default time period
      */
-    public static Build assertBuildCompletes(ForgeClient forgeClient, String projectName) throws Exception {
-        return assertBuildCompletes(forgeClient, projectName, DEFAULT_TIMEOUT_MILLIS);
+    public static Build assertBuildCompletes(JenkinsServer jenkins, String jenkinsUrl, String folderName, String jobName) throws Exception {
+        return assertBuildCompletes(jenkins, jenkinsUrl, folderName, jobName, DEFAULT_TIMEOUT_MILLIS);
     }
 
 
@@ -207,28 +207,28 @@ public class ForgeClientAsserts {
     /**
      * Asserts that a Build is created and that it completes successfully within the given time period
      */
-    public static Build assertBuildCompletes(ForgeClient forgeClient, String projectName, long timeoutMillis) throws Exception {
-
+    public static Build assertBuildCompletes(JenkinsServer jenkins, String jenkinsUrl, String folderName, String jobName, long timeoutMillis) throws Exception {
         Asserts.assertWaitFor(10 * 60 * 1000, new Block() {
             @Override
             public void invoke() throws Exception {
-                JobWithDetails job = assertJob(projectName);
+                JobWithDetails job = assertJob(jenkins, folderName, jobName);
                 Build lastBuild = job.getLastBuild();
-                assertThat(lastBuild.getNumber()).describedAs("Waiting for latest build for job " + projectName + " to have a valid build number").isGreaterThan(0);
+                assertThat(lastBuild.getNumber()).describedAs("Waiting for latest build for job " + folderName + "/" + jobName + " to have a valid build number").isGreaterThan(0);
                 String buildUrl = lastBuild.getUrl();
-                assertThat(buildUrl).describedAs("Waiting for latest build for job " + projectName + " to have a valid URL").isNotEmpty().doesNotContain("UNKNOWN");
+                assertThat(buildUrl).describedAs("Waiting for latest build for job " + jobName + " to have a valid URL").isNotEmpty().doesNotContain("UNKNOWN");
             }
         });
 
-        JobWithDetails job = assertJob(projectName);
+        JobWithDetails job = assertJob(jenkins, jobName);
         Build lastBuild = job.getLastBuild();
-        assertThat(lastBuild).describedAs("No Jenkins Build for Job: " + projectName).isNotNull();
+
+        assertThat(lastBuild).describedAs("No Jenkins Build for Job: " + jobName).isNotNull();
         BuildWithDetails details = null;
-        String description = "Job " + projectName + " build " + lastBuild.getNumber();
+        String description = "Job " + jobName + " build " + lastBuild.getNumber();
 
         LOG.info("Waiting for build " + description + " to complete...");
 
-        String logUri = getBuildConsoleTextUrl(lastBuild, description);
+        String logUri = getBuildConsoleTextUrl(jenkinsUrl, lastBuild, description);
 
         long end = System.currentTimeMillis() + timeoutMillis;
         TailResults tailResults = TailResults.START;
@@ -261,7 +261,7 @@ public class ForgeClientAsserts {
             }
         }
         details = lastBuild.details();
-        dumpBuildLog(lastBuild, description);
+        dumpBuildLog(jenkinsUrl, lastBuild, description);
         LOG.info("");
 
         BuildResult result = details.getResult();
@@ -271,15 +271,29 @@ public class ForgeClientAsserts {
         return lastBuild;
     }
 
-    public static JobWithDetails assertJob(String projectName) throws URISyntaxException, IOException {
-        JenkinsServer jenkins = createJenkinsServer();
-        JobWithDetails job = jenkins.getJob(projectName);
-        assertThat(job).describedAs("No Jenkins Job found for name: " + projectName).isNotNull();
+    public static JobWithDetails assertJob(JenkinsServer jenkins, String folderName, String jobName) throws IOException {
+        JobWithDetails folder = jenkins.getJob(folderName);
+        if (folder == null) {
+            fail("Could not find folder Job called: " + folderName);
+        }
+        Optional<FolderJob> optional = jenkins.getFolderJob(folder);
+        if (!optional.isPresent()) {
+            fail("Could not find FolderJob called: " + folderName);
+        }
+        FolderJob folderJob = optional.get();
+        JobWithDetails job = jenkins.getJob(folderJob, jobName);
+        assertThat(job).describedAs("No Jenkins Job found in folder: " + folderName + " for name: " + jobName).isNotNull();
         return job;
     }
 
-    public static void dumpBuildLog(Build lastBuild, String description) throws IOException {
-        String logUri = getBuildConsoleTextUrl(lastBuild, description);
+    public static JobWithDetails assertJob(JenkinsServer jenkins, String jobName) throws IOException {
+        JobWithDetails job = jenkins.getJob(jobName);
+        assertThat(job).describedAs("No Jenkins Job found for name: " + jobName).isNotNull();
+        return job;
+    }
+
+    public static void dumpBuildLog(String jenkinsUrl, Build lastBuild, String description) throws IOException {
+        String logUri = getBuildConsoleTextUrl(jenkinsUrl, lastBuild, description);
 
         URL logURL = new URL(logUri);
         InputStream inputStream = logURL.openStream();
@@ -287,13 +301,13 @@ public class ForgeClientAsserts {
         printBuildLog(inputStream, description);
     }
 
-    public static String getBuildConsoleTextUrl(Build lastBuild, String description) {
+    public static String getBuildConsoleTextUrl(String jenkinsUrl, Build lastBuild, String description) {
         String url = lastBuild.getUrl();
 
         LOG.info("Build URL: " + url);
         String logUri = url + "/consoleText";
         if (logUri.indexOf("://") < 0) {
-            logUri = URLUtils.pathJoin(getJenkinsURL(), logUri);
+            logUri = URLUtils.pathJoin(jenkinsUrl, logUri);
         }
         LOG.info("Tailing " + description + " at URL:" + logUri);
         return logUri;

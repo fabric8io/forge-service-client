@@ -16,6 +16,7 @@
  */
 package io.fabric8.forge.rest.client;
 
+import com.offbytwo.jenkins.JenkinsServer;
 import com.offbytwo.jenkins.model.Build;
 import com.offbytwo.jenkins.model.JobWithDetails;
 import io.fabric8.forge.rest.client.dto.CommandInputDTO;
@@ -24,6 +25,7 @@ import io.fabric8.forge.rest.client.dto.ExecutionResult;
 import io.fabric8.forge.rest.client.dto.InputValueDTO;
 import io.fabric8.forge.rest.client.dto.NextStepResult;
 import io.fabric8.forge.rest.client.dto.PropertyDTO;
+import io.fabric8.forge.rest.client.dto.UIMessageDTO;
 import io.fabric8.forge.rest.client.dto.ValidationResult;
 import io.fabric8.utils.Asserts;
 import io.fabric8.utils.Block;
@@ -49,16 +51,17 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
-import static io.fabric8.forge.rest.client.CommandConstants.DevopsEdit;
 import static io.fabric8.forge.rest.client.CommandConstants.DevopsEditProperties.Pipeline.CanaryReleaseAndStage;
-import static io.fabric8.forge.rest.client.CommandConstants.ProjectNew;
 import static io.fabric8.forge.rest.client.ForgeClientAsserts.asserGetAppGitCloneURL;
 import static io.fabric8.forge.rest.client.ForgeClientAsserts.assertChooseValue;
 import static io.fabric8.forge.rest.client.ForgeClientAsserts.assertJob;
 import static io.fabric8.forge.rest.client.ForgeClientAsserts.getBasedir;
 import static io.fabric8.forge.rest.client.ForgeClientHelpers.addPage;
+import static io.fabric8.forge.rest.client.ForgeClientHelpers.addPageValues;
+import static io.fabric8.forge.rest.client.ForgeClientHelpers.createJenkinsServer;
 import static io.fabric8.forge.rest.client.ForgeClientHelpers.createPage;
 import static io.fabric8.forge.rest.client.ForgeClientHelpers.getCommandProperties;
+import static io.fabric8.forge.rest.client.ForgeClientHelpers.getJenkinsURL;
 import static io.fabric8.forge.rest.client.ForgeClientHelpers.updatePageValues;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -67,6 +70,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class ForgeTestSupport {
     private static final transient Logger LOG = LoggerFactory.getLogger(ForgeTestSupport.class);
 
+    // TODO 
+    protected String namespace = "myproject";
+    protected String jenkinsNamespace = "myproject-jenkins";
     protected String gitProvider = "gogs";
     protected ForgeClient forgeClient = new ForgeClient();
 
@@ -84,8 +90,13 @@ public class ForgeTestSupport {
             @Override
             public Object getValue(String propertyName, PropertyDTO property, int pageNumber) {
                 switch (propertyName) {
+                    case "kubernetesSpace":
+                        return namespace;
+                    case "jenkinsSpace":
+                        return jenkinsNamespace;
                     case "gitProvider":
                         return gitProvider;
+                        //return assertChooseValue(propertyName, property, pageNumber, gitProvider);
                     case "named":
                         return projectName;
                     case "targetLocation":
@@ -100,14 +111,16 @@ public class ForgeTestSupport {
             }
         };
 
-        executeWizardCommand(CommandNames.OBSIDIAN_NEW_QUICKSTART, projectTypeValues, 4);
+        executeWizardCommand(CommandNames.OBSIDIAN_NEW_QUICKSTART, projectTypeValues, 5);
 
-        Build firstBuild = ForgeClientAsserts.assertBuildCompletes(forgeClient, projectName);
+        JenkinsServer jenkins = createJenkinsServer(forgeClient.getKubernetesClient(), jenkinsNamespace);
+        String jenkinsUrl = getJenkinsURL(forgeClient.getKubernetesClient(), jenkinsNamespace);
+        Build firstBuild = ForgeClientAsserts.assertBuildCompletes(jenkins, jenkinsUrl, namespace, projectName);
 
-        assertCodeChangeTriggersWorkingBuild(projectName, firstBuild);
+        assertCodeChangeTriggersWorkingBuild(jenkins, jenkinsUrl, projectName, firstBuild, namespace);
     }
 
-    protected Build assertCodeChangeTriggersWorkingBuild(final String projectName, Build firstBuild) throws Exception {
+    protected Build assertCodeChangeTriggersWorkingBuild(JenkinsServer jenkins, String jenkinsUrl, final String projectName, Build firstBuild, String folderName) throws Exception {
         File cloneDir = new File(getBasedir(), "target/projects/" + projectName);
 
         String gitUrl = asserGetAppGitCloneURL(forgeClient, projectName);
@@ -148,13 +161,14 @@ public class ForgeTestSupport {
         Asserts.assertWaitFor(10 * 60 * 1000, new Block() {
             @Override
             public void invoke() throws Exception {
-                JobWithDetails job = assertJob(projectName);
+                JenkinsServer jenkins = createJenkinsServer(forgeClient.getKubernetesClient(), jenkinsNamespace);
+                JobWithDetails job = assertJob(jenkins, folderName, projectName);
                 Build lastBuild = job.getLastBuild();
                 assertThat(lastBuild.getNumber()).describedAs("Waiting for latest build for job " + projectName + " to start").isGreaterThanOrEqualTo(nextBuildNumber);
             }
         });
 
-        return ForgeClientAsserts.assertBuildCompletes(forgeClient, projectName);
+        return ForgeClientAsserts.assertBuildCompletes(jenkins, jenkinsUrl, folderName, projectName);
     }
 
     protected ExecutionResult executeWizardCommand(String commandName, ValueProvider valueProvider, int numberOfPages) throws Exception {
@@ -170,6 +184,8 @@ public class ForgeTestSupport {
 
             for (int page = 1; page < numberOfPages; page++) {
                 NextStepResult nextStepResult = validateAndNextStep(commandName, executionRequest, valueProvider);
+                logValidationMessages(nextStepResult);
+
                 addNextPage(commandName, executionRequest, valueProvider, inputList, nextStepResult);
                 //ForgeClientAsserts.assertCanMoveToNextStep(nextStepResult);
                 executionRequest.setStepIndex(page);
@@ -231,13 +247,31 @@ public class ForgeTestSupport {
         ValidationResult validationResult = validateAndUpdatePageValues(commandName, executionRequest, valueProvider);
         ForgeClientAsserts.assertValidAndCanMoveNext(executionRequest, validationResult);
 
-        return forgeClient.nextStep(commandName, executionRequest);
+        NextStepResult result = forgeClient.nextStep(commandName, executionRequest);
+        return result;
+    }
+
+    private void logInputs(String message, List<PropertyDTO> inputs) {
+        StringBuffer buffer = new StringBuffer();
+        for (PropertyDTO input : inputs) {
+            if (buffer.length() > 0) {
+                buffer.append(", ");
+            }
+            buffer.append(input.getName());
+        }
+        System.out.println(message + ": " + buffer);
+
     }
 
     protected ExecutionResult validateAndExecute(String commandName, ExecutionRequest executionRequest, ValueProvider valueProvider) throws Exception {
         ValidationResult validationResult = validateAndUpdatePageValues(commandName, executionRequest, valueProvider);
         ForgeClientAsserts.assertValidAndCanExecute(validationResult);
 
+        System.out.println("Executing command " + commandName + " with inputs:");
+        List<InputValueDTO> inputs = executionRequest.getInputs();
+        for (InputValueDTO input : inputs) {
+            System.out.println("  " + input.getName() + ": " + input.getValue());
+        }
         return forgeClient.executeCommand(commandName, executionRequest);
     }
 
@@ -246,11 +280,23 @@ public class ForgeTestSupport {
         LOG.info("Forge wizard step inputs: " + page);
         ValidationResult result = forgeClient.validateCommand(commandName, executionRequest);
         LOG.info("Forge Result: " + result);
+        logValidationMessages(result);
         Map<String, PropertyDTO> commandProperties = getCommandProperties(result);
 
         // lets update the page with any completed values
         updatePageValues(executionRequest.getInputs(), commandProperties, valueProvider, page);
+        addPageValues(executionRequest.getInputs(), page);
         return result;
+    }
+
+    private void logValidationMessages(ValidationResult result) {
+        List<UIMessageDTO> messages = result.getMessages();
+        if (messages != null && !messages.isEmpty()) {
+            System.out.println("Validation messages:");
+            for (UIMessageDTO message : messages) {
+                System.out.println("  " + message.getInput() + ": " + message.getDescription());
+            }
+        }
     }
 
     protected void configureGogsGitAccount() throws Exception {

@@ -26,6 +26,6 @@ public class CreateSpringBootProjectKT extends ForgeGogsTestSupport {
 
     @Test
     public void testSpringBootProject() throws Exception {
-        assertCreateAndBuildProject("springboot-rest-", "Spring Boot Tomcat - Rest");
+        assertCreateAndBuildProject("springboot-rest-", "Spring Boot Tomcat - Rest & Config Map");
     }
 }
